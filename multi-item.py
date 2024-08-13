@@ -117,7 +117,7 @@ def run_simulation(v1=100, v2=60, q1=1, q2=0.5, num_bidders=3, num_rounds=1000):
 # Run the simulation
 v1 = 100
 v2 = 60
-q1 = 2
+q1 = 1
 q2 = 0.5
 num_bidders = 3  # Please put a number greater than or equal to 3
 num_rounds = 1000
