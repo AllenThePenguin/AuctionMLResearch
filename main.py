@@ -116,8 +116,8 @@ def run_simulation(valuation1=100, valuation2=100, auction_type="first-price", v
 # Run the simulation with the desired auction parameters
 valuation1 = 100
 valuation2 = 100
-auction_type = "second-price"
-visibility = "open"
+auction_type = "first-price"
+visibility = "closed"
 num_rounds = 1000
 bids_bidder_1, bids_bidder_2, winning_bids = run_simulation(valuation1, valuation2, auction_type, visibility, num_rounds)
 
