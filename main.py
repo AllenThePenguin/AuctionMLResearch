@@ -116,42 +116,57 @@ def run_simulation(valuation1=100, valuation2=100, auction_type="first-price", v
 # Run the simulation with the desired auction parameters
 valuation1 = 100
 valuation2 = 100
-auction_type = "first-price"
+auction_type = "second-price"
 visibility = "closed"
-num_rounds = 1000
-bids_bidder_1, bids_bidder_2, winning_bids = run_simulation(valuation1, valuation2, auction_type, visibility, num_rounds)
+num_rounds = 2000
+num_tests = 100
+results = [0] * num_rounds
+for i in range(num_tests):
+    bids_bidder_1, bids_bidder_2, winning_bids = run_simulation(valuation1, valuation2, auction_type, visibility, num_rounds)
+    for j in range(num_rounds):
+        results[j] += winning_bids[j]
+for i in range(num_rounds):
+    results[i] /= num_tests
 
 # Assuming you have run the simulation and stored the bids in the variables
 # bids_bidder_1, bids_bidder_2
 rounds = np.arange(num_rounds)
 
 # Create a figure with two subplots (one above the other)
-plt.figure(figsize=(10, 10))
+# plt.figure(figsize=(10, 10))
 
-# Subplot for Bidder 1
-plt.subplot(3, 1, 1)
-plt.scatter(rounds, bids_bidder_1, label='Bidder 1 Bids', color='blue', s=5)
+plt.subplot(1, 1, 1)
+plt.scatter(rounds, results, label='Winning Bids', color='blue', s=5)
 plt.xlabel('Round Number')
 plt.ylabel('Amount Bid')
-plt.title('Bids Over Rounds - Bidder 1')
+plt.title('Winning Bids Over Rounds')
 plt.grid(True)
-
-# Subplot for Bidder 2
-plt.subplot(3, 1, 2)
-plt.scatter(rounds, bids_bidder_2, label='Bidder 2 Bids', color="green", s=5)
-plt.xlabel('Round Number')
-plt.ylabel('Amount Bid')
-plt.title('Bids Over Rounds - Bidder 2')
-plt.grid(True)
-
-# Subplot for Winning Bids
-plt.subplot(3, 1, 3)
-plt.scatter(rounds, winning_bids, label='Bidder 2 Bids', color="red", s=5)
-plt.xlabel('Round Number')
-plt.ylabel('Amount Bid')
-plt.title('Bids Over Rounds - Winning Bids')
-plt.grid(True)
-
-# Show the plots
-plt.tight_layout()  # Adjusts spacing between the plots to prevent overlap
 plt.show()
+
+# # Subplot for Bidder 1
+# plt.subplot(3, 1, 1)
+# plt.scatter(rounds, bids_bidder_1, label='Bidder 1 Bids', color='blue', s=5)
+# plt.xlabel('Round Number')
+# plt.ylabel('Amount Bid')
+# plt.title('Bids Over Rounds - Bidder 1')
+# plt.grid(True)
+#
+# # Subplot for Bidder 2
+# plt.subplot(3, 1, 2)
+# plt.scatter(rounds, bids_bidder_2, label='Bidder 2 Bids', color="green", s=5)
+# plt.xlabel('Round Number')
+# plt.ylabel('Amount Bid')
+# plt.title('Bids Over Rounds - Bidder 2')
+# plt.grid(True)
+#
+# # Subplot for Winning Bids
+# plt.subplot(3, 1, 3)
+# plt.scatter(rounds, winning_bids, label='Bidder 2 Bids', color="red", s=5)
+# plt.xlabel('Round Number')
+# plt.ylabel('Amount Bid')
+# plt.title('Bids Over Rounds - Winning Bids')
+# plt.grid(True)
+#
+# # Show the plots
+# plt.tight_layout()  # Adjusts spacing between the plots to prevent overlap
+
