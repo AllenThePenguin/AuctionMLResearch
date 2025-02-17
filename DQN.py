@@ -1,69 +1,97 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.stats import ttest_1samp
+import matplotlib.pyplot as plt
+import random
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 # Run the simulation with the desired auction parameters
 VALUATIONS = [100] * 2
 CONVERGE_WINDOW = 1000
-NUM_AUCTIONS = 150000
-NUM_EXPERIMENTS = 10000
+NUM_AUCTIONS = 10000
+NUM_EXPERIMENTS = 1000
 
-CONFIDENCE_INTERVALS = False
-NEED_RAW_DATA = False
+CONFIDENCE_INTERVALS = True
 ALPHA = 0.1
 GAMMA = 0.95
 
-class RLBidder:
-    def __init__(self, valuation, learning_rate=0.1, discount_factor=0.95):
+
+class DQN(nn.Module):
+    def __init__(self, state_size, action_size):
+        super(DQN, self).__init__()
+        self.fc1 = nn.Linear(state_size, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, action_size)
+        
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = torch.relu(self.fc2(x))
+        return self.fc3(x)
+
+class DeepQLearningBidder:
+    def __init__(self, valuation, learning_rate=0.01, discount_factor=0.95, epsilon=1.0):
         self.valuation = valuation
         self.learning_rate = learning_rate
         self.discount_factor = discount_factor
-        self.q_table = np.zeros(self.valuation + 1)  # Q-values for each possible bid
-        self.epsilon = 1.0  # Exploration rate
-        self.epsilon_decay = 0.99  # Decay rate for epsilon
+        self.epsilon = epsilon
+        self.epsilon_decay = 0.995
+        self.epsilon_min = 0.01
+        self.memory = []
+        self.batch_size = 32
+        self.state_size = 1  # Current bid price as state
+        self.action_size = valuation + 1  # Possible bids
+        
+        self.model = DQN(self.state_size, self.action_size)
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.criterion = nn.MSELoss()
 
     def select_bid(self):
-        # Epsilon-greedy action selection
         if np.random.rand() < self.epsilon:
-            # Explore: choose a random bid
-            bid = np.random.randint(0, self.valuation + 1)
+            return np.random.randint(0, self.valuation + 1)
         else:
-            # Exploit: choose the best known bid
-            bid = np.argmax(self.q_table)
-        return bid
+            state = torch.tensor([[self.valuation]], dtype=torch.float32)
+            q_values = self.model(state)
+            return torch.argmax(q_values).item()
 
     def update_auction_result(self, is_winner, payment, my_bid, winner_bid):
         reward = self._calculate_reward(is_winner, payment, my_bid, winner_bid)
-        self._update_q_table(my_bid, reward)
-        self._update_epsilon()
-            
+        next_state = my_bid  # New state after auction
+        self._store_experience(self.valuation, my_bid, reward, next_state)
+        self._update_model()
+
     def _calculate_reward(self, is_winner, payment, my_bid, winner_bid):
         if is_winner:
-            # Reward is the difference between the valuation and the payment
-            reward = self.valuation - payment
-        else:
-            # No reward for losing (could also consider a small negative reward)
-            reward = 0
-            
-        # If winner_bid is provided (open auction)
-        if winner_bid is not None and winner_bid != my_bid:
-            if my_bid > winner_bid:
-                reward += 0.1 * (self.valuation - my_bid)  # Slight positive adjustment for winning by a small margin
-            else:
-                reward -= 0.1 * (winner_bid - my_bid)  # Slight penalty for losing by a large margin
+            return self.valuation - payment  # Profit
+        return 0  # No reward for losing
 
-        return reward
+    def _store_experience(self, state, action, reward, next_state):
+        self.memory.append((state, action, reward, next_state))
+        if len(self.memory) > 1000:
+            self.memory.pop(0)
 
-    def _update_q_table(self, bid, reward):
-        # Update the Q-value for the chosen bid
-        future_reward = np.max(self.q_table)  # Assume single-state Q-learning for simplicity
-        self.q_table[bid] += self.learning_rate * (
-            reward + self.discount_factor * future_reward - self.q_table[bid]
-        )
-
-    def _update_epsilon(self):
-        # Decay the exploration rate
-        self.epsilon = max(0.01, self.epsilon * self.epsilon_decay)
+    def _update_model(self):
+        if len(self.memory) < self.batch_size:
+            return
+        
+        batch = random.sample(self.memory, self.batch_size)
+        states, actions, rewards, next_states = zip(*batch)
+        
+        states = torch.tensor(states, dtype=torch.float32).view(-1, 1)
+        actions = torch.tensor(actions, dtype=torch.long)
+        rewards = torch.tensor(rewards, dtype=torch.float32)
+        next_states = torch.tensor(next_states, dtype=torch.float32).view(-1, 1)
+        
+        q_values = self.model(states).gather(1, actions.view(-1, 1)).squeeze()
+        next_q_values = self.model(next_states).max(1)[0].detach()
+        target_q_values = rewards + self.discount_factor * next_q_values
+        
+        loss = self.criterion(q_values, target_q_values)
+        self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer.step()
+        
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
         
 
 # one exeperiment with multiple auctions, collect the bidder bids and winning bids
@@ -78,7 +106,7 @@ class AuctionEnvironment:
     
     def run_simulation(self):
         global ALPHA, GAMMA
-        bidders = [RLBidder(self.valuations[i], ALPHA, GAMMA) for i in range(self.bidders_num)]
+        bidders = [DeepQLearningBidder(self.valuations[i], ALPHA, GAMMA) for i in range(self.bidders_num)]
 
         # Lists to store bids for plotting
         bidder_bids = [] # bidder_bids[round][bidder] is the bid of the bidder at a specific round
@@ -93,12 +121,10 @@ class AuctionEnvironment:
             winner_bid = max(bids)
 
             # Store the bids for this round
+            bidder_bids.append([]) # add a new round bids
+            for bid in bids:
+                bidder_bids[-1].append(bid)
             winning_bids.append(winner_bid)
-
-            if NEED_RAW_DATA:
-                bidder_bids.append([]) # add a new round bids
-                for bid in bids:
-                    bidder_bids[-1].append(bid)
 
             # Calculate rewards and update the bidders
             for i, bidder in enumerate(bidders):
@@ -146,29 +172,23 @@ class Experiments:
         experiments_bidder_bids = []       # experiments_bidder_bids[experiment][auction][bidder]
         experiments_winning_bids = []      # experiments_winning_bids[experiment][auction]
 
-        exp = self._get_experiment_suffix("")
         for i in range(self.num_experiments):
-            if i %10 == 0:
-                print(f"{exp} : running simulation {i} out of {self.num_experiments}")
             bidder_bids, winning_bids = self.env.run_simulation()
             experiments_bidder_bids.append(bidder_bids)
             experiments_winning_bids.append(winning_bids)
 
-        print(f"{exp} : start calculating statistics")
-        avg_winning_bids, std_winning_bids, ci_lower, ci_upper = self._calc_statistics(experiments_winning_bids)
+        avg_winning_bids, std_winning_bids, ci_lower, ci_upper = self._calc_statistics(experiments_bidder_bids, experiments_winning_bids)
 
-        print(f"{exp} : start performing t_test")
         converge_value, t_stat, p_value = self._perform_t_test(avg_winning_bids[-CONVERGE_WINDOW:])
 
-        if NEED_RAW_DATA:
-            self._output_raw_data(experiments_bidder_bids)
+        #self._output_raw_data(experiments_bidder_bids)
         self._output_results(converge_value, t_stat, p_value)
 
-        print(f"{exp} : start showing figure")
         self._show_figure(avg_winning_bids, std_winning_bids, ci_lower, ci_upper, converge_value)
         
-    def _calc_statistics(self, experiments_winning_bids):
+    def _calc_statistics(self, experiments_bidder_bids, experiments_winning_bids):
         '''
+        @param experiments_bidder_bids[experiment][auction][bidder]: the raw bidder bid for each experiment, each auctions and each bidder
         @param experiments_winning_bids[experiment][auction]: the raw winning bid for each experiment, each auctions
 
         @return avg_winning_bids[auction], std_winning_bids[auction], ci_lower[auction], ci_upper[auction]
@@ -274,7 +294,7 @@ class Experiments:
 
     def _output_raw_data(self, experiments_bidder_bids):
         # experiments_bidder_bids[experiment][auction][bidder]
-        file_name = self._get_experiment_suffix("raw_data") + ".csv"
+        file_name = self._get_file_name_suffix("raw_data")
         with open(file_name, 'w') as file:
             #output header in raw data
             file.write("Experiment,Round,Bidder,Bid_Value\n")
@@ -285,87 +305,84 @@ class Experiments:
                         file.write(str(exp_id) + "," + str(auction_id) + ",bidder_" + str(bidder_id) + "," + str(bid) + "\n")
 
     def _output_results(self, converge_value, t_stat, p_value):
-        file_name = self._get_experiment_suffix("result") + ".csv"
+        file_name = self._get_file_name_suffix("result")
         with open(file_name, 'w') as file:
             #output header in raw data
             file.write("converge_value, t_stat, p_value\n")
             file.write(f"{converge_value}, {t_stat}, {p_value}\n")
 
-    def _get_experiment_suffix(self, prefix):
+    def _get_file_name_suffix(self, prefix):
         global ALPHA, GAMMA
-        file_name = f"{prefix}_{self.auction_type}_alpha_{ALPHA}_gamma_{GAMMA}"
+        file_name = f"{prefix}_{self.auction_type}_alpha_{ALPHA}_gamma_{GAMMA}.csv"
         return file_name
 
-    
 experiment = Experiments("first-price", "closed")
 experiment.run_experiments()
 
 experiment = Experiments("second-price", "closed")
 experiment.run_experiments()
+
+# ALPHA = 0.05
+# GAMMA = 0.5
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.05
+# GAMMA = 0.8
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.05
+# GAMMA = 0.99
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.1
+# GAMMA = 0.5
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.1
+# GAMMA = 0.8
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.1
+# GAMMA = 0.99
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.3
+# GAMMA = 0.5
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.3
+# GAMMA = 0.8
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
+# ALPHA = 0.3
+# GAMMA = 0.99
+# experiment = Experiments("first-price", "closed")
+# experiment.run_experiments()
+# experiment = Experiments("second-price", "closed")
+# experiment.run_experiments()
+
 plt.show()
-
-
-# ALPHA = 0.05
-# GAMMA = 0.5
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.05
-# GAMMA = 0.8
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.05
-# GAMMA = 0.99
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.1
-# GAMMA = 0.5
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.1
-# GAMMA = 0.8
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.1
-# GAMMA = 0.99
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.3
-# GAMMA = 0.5
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.3
-# GAMMA = 0.8
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# ALPHA = 0.3
-# GAMMA = 0.99
-# experiment = Experiments("first-price", "closed")
-# experiment.run_experiments()
-# experiment = Experiments("second-price", "closed")
-# experiment.run_experiments()
-
-# plt.show()
