@@ -5,11 +5,11 @@ from scipy.stats import ttest_1samp
 # Run the simulation with the desired auction parameters
 VALUATIONS = [100] * 2
 CONVERGE_WINDOW = 1000
-NUM_AUCTIONS = 150000
-NUM_EXPERIMENTS = 10000
+NUM_AUCTIONS = 10000
+NUM_EXPERIMENTS = 1000
 
-CONFIDENCE_INTERVALS = False
-NEED_RAW_DATA = False
+CONFIDENCE_INTERVALS = True
+SAVE_RAW_DATA = False
 ALPHA = 0.1
 GAMMA = 0.95
 
@@ -70,50 +70,49 @@ class RLBidder:
 class AuctionEnvironment:
     def __init__(self, valuations, auction_type, visibility, num_auctions):
         self.valuations = valuations
-        self.bidders_num = len(self.valuations)
+        self.num_bidders = len(self.valuations)
         self.auction_type = auction_type  # Auction type: "first-price" or "second-price"
         self.visibility = visibility
         self.num_auctions = num_auctions        
 
-    
-    def run_simulation(self):
+    # Run N auctions and return the raw bids for each bidder and winning bids
+    def run_simulation(self, save_raw_bids = False):
         global ALPHA, GAMMA
-        bidders = [RLBidder(self.valuations[i], ALPHA, GAMMA) for i in range(self.bidders_num)]
+        bidders = [RLBidder(self.valuations[i], ALPHA, GAMMA) for i in range(self.num_bidders)]
 
         # Lists to store bids for plotting
-        bidder_bids = [] # bidder_bids[round][bidder] is the bid of the bidder at a specific round
-        winning_bids = []
+        bidder_bids = []  # bidder_bids[round][bidder] is the bid of the bidder at a specific round
+        winning_bids = [] # winning_bids[round] is the winning bid at a specific round
 
         for round in range(self.num_auctions):
             # Each bidder selects a bid
             bids = [bidder.select_bid() for bidder in bidders]
 
             # Run the auction and get the results
-            winner, payment = self._run_auction(bids)
-            winner_bid = max(bids)
+            winner_id, winning_bid, payment = self._run_auction(bids)
 
             # Store the bids for this round
-            winning_bids.append(winner_bid)
+            winning_bids.append(winning_bid)
 
-            if NEED_RAW_DATA:
+            if save_raw_bids:
                 bidder_bids.append([]) # add a new round bids
                 for bid in bids:
                     bidder_bids[-1].append(bid)
 
             # Calculate rewards and update the bidders
             for i, bidder in enumerate(bidders):
-                bidder.update_auction_result(i == winner, payment, bids[i], winner_bid if self.visibility == "open" else None)
+                bidder.update_auction_result(i == winner_id, payment, bids[i], winning_bid if self.visibility == "open" else None)
 
             # Optional: Print or track results
             # if round % 1000 == 0:
             #     print(f"Round {round}: Bids - {bids}, Winner - Bidder {winner}, Payment - {payment}")
 
         return bidder_bids, winning_bids
-    
+
     def _run_auction(self, bids):
         # Determine the winner: the highest bid wins
         winning_bid = max(bids)
-        winner = np.argmax(bids)
+        winner_id = np.argmax(bids)
 
         if self.auction_type == "first-price":
             # In a first-price auction, the winner pays their own bid
@@ -126,7 +125,7 @@ class AuctionEnvironment:
             raise ValueError("Invalid auction type specified.")
 
         # Return the winner, payment
-        return winner, payment
+        return winner_id, winning_bid, payment
 
 # run multiple experiments, and generate the raw log, also do the statistic and show figures
 class Experiments:
@@ -137,20 +136,22 @@ class Experiments:
         self.visibility = visibility  # visibility: "open" or "closed"
         self.num_auctions = NUM_AUCTIONS
         self.num_experiments = NUM_EXPERIMENTS
+        self.num_bidders = len(VALUATIONS)
         # TODO: hacking about valuations. Use the first one as the standard. It is problemtic if the bidders have different valuations.
         self.expected_value = VALUATIONS[0]/2 if self.auction_type == "first-price" else VALUATIONS[0]
 
         self.env = AuctionEnvironment(VALUATIONS, self.auction_type, self.visibility, self.num_auctions)
 
     def run_experiments(self):
-        experiments_bidder_bids = []       # experiments_bidder_bids[experiment][auction][bidder]
-        experiments_winning_bids = []      # experiments_winning_bids[experiment][auction]
+        experiments_bidder_bids = []       # experiments_bidder_bids[experiment][auction][bidder] is the raw bit value
+        experiments_winning_bids = []      # experiments_winning_bids[experiment][auction] is the winner's bid
 
         exp = self._get_experiment_suffix("")
         for i in range(self.num_experiments):
-            if i %10 == 0:
+            if i %50 == 0:
                 print(f"{exp} : running simulation {i} out of {self.num_experiments}")
-            bidder_bids, winning_bids = self.env.run_simulation()
+                
+            bidder_bids, winning_bids = self.env.run_simulation(i ==0 or SAVE_RAW_DATA)
             experiments_bidder_bids.append(bidder_bids)
             experiments_winning_bids.append(winning_bids)
 
@@ -160,13 +161,19 @@ class Experiments:
         print(f"{exp} : start performing t_test")
         converge_value, t_stat, p_value = self._perform_t_test(avg_winning_bids[-CONVERGE_WINDOW:])
 
-        if NEED_RAW_DATA:
+        if SAVE_RAW_DATA:
             self._output_raw_data(experiments_bidder_bids)
         self._output_results(converge_value, t_stat, p_value)
 
         print(f"{exp} : start showing figure")
-        self._show_figure(avg_winning_bids, std_winning_bids, ci_lower, ci_upper, converge_value)
+        self._show_winning_bid_curve(avg_winning_bids, std_winning_bids, ci_lower, ci_upper, converge_value)
         
+        print(f"{exp} : start showing figure")
+        # just use the first bider of the first experiment for the trajectory
+        single_bidder_bids = [row[0] for row in experiments_bidder_bids[0]]
+        self._show_bid_trajectory(single_bidder_bids) 
+        
+                
     def _calc_statistics(self, experiments_winning_bids):
         '''
         @param experiments_winning_bids[experiment][auction]: the raw winning bid for each experiment, each auctions
@@ -215,7 +222,7 @@ class Experiments:
 
         return avg_winning_bids, std_winning_bids, ci_lower, ci_upper
 
-    def _show_figure(self, avg_winning_bids, std_winning_bids, ci_lower, ci_upper, converge_value):
+    def _show_winning_bid_curve(self, avg_winning_bids, std_winning_bids, ci_lower, ci_upper, converge_value):
         print(f"winning bids: {avg_winning_bids[-3]} , {avg_winning_bids[-2]} , {avg_winning_bids[-1]}" ) # print out the last 3 values
         print(f"standard deviation: {std_winning_bids[-3]} , {std_winning_bids[-2]} , {std_winning_bids[-1]}" ) 
     
@@ -253,7 +260,35 @@ class Experiments:
         report_file_name = f"report_{self.auction_type.upper()}_a_{ALPHA}_r_{GAMMA}.jpg"
         plt.savefig(report_file_name, format="JPG")
 
+    def _show_bid_trajectory(self, single_bidder_bids):
+        '''
+        @param single_bidder_bids[auction] is the raw bit value
+        '''
+        
+        # show the figure
+        Experiments.figure_index += 1
+        # Assuming you have run the simulation and stored the bids in the variables
+        rounds = np.arange(self.num_auctions)
 
+        colors = ['blue', 'red', 'yellow', 'green']
+        plt.figure(Experiments.figure_index)
+        
+        # show the winning bid curve 
+        plt.subplot(1, 1, 1)
+
+        plt.scatter(rounds, single_bidder_bids, label='Bids', color=colors[0], s=1)
+
+        plt.xlabel('Auction Index')
+        plt.ylabel('Bid($)')
+        #plt.ylim(40, 102)
+        plt.title(self.auction_type.upper() + " a: " + str(ALPHA) + " r:" + str(GAMMA))
+        plt.legend(loc="right")
+        plt.grid(True)
+
+        # save the chart into jpg files
+        report_file_name = f"trajectory_{self.auction_type.upper()}_a_{ALPHA}_r_{GAMMA}.jpg"
+        plt.savefig(report_file_name, format="JPG")
+        
     def _perform_t_test(self, avg_winning_bids_window ):
         '''
         @param avg_winning_bids_window[auction]: the average of the winning bids for auctions in the converge window
