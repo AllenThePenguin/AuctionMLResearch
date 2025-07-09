@@ -4,14 +4,16 @@ from scipy.stats import ttest_1samp
 
 # Run the simulation with the desired auction parameters
 VALUATIONS = [100] * 2
-CONVERGE_WINDOW = 1000
-NUM_AUCTIONS = 10000
+CONVERGE_WINDOW = 10000
+NUM_AUCTIONS = 150000
 NUM_EXPERIMENTS = 1000
 
 CONFIDENCE_INTERVALS = True
 SAVE_RAW_DATA = False
 ALPHA = 0.1
 GAMMA = 0.95
+
+plt.rcParams.update({'font.size': 16}) 
 
 class RLBidder:
     def __init__(self, valuation, learning_rate=0.1, discount_factor=0.95):
@@ -170,7 +172,7 @@ class Experiments:
         
         print(f"{exp} : start showing figure")
         # just use the first bider of the first experiment for the trajectory
-        single_bidder_bids = [row[0] for row in experiments_bidder_bids[0]]
+        single_bidder_bids = [row[1] for row in experiments_bidder_bids[0]]
         self._show_bid_trajectory(single_bidder_bids) 
         
                 
@@ -276,7 +278,7 @@ class Experiments:
         # show the winning bid curve 
         plt.subplot(1, 1, 1)
 
-        plt.scatter(rounds, single_bidder_bids, label='Bids', color=colors[0], s=1)
+        plt.scatter(rounds, single_bidder_bids, label='Single Q-learning Agent Bids', color=colors[0], s=1)
 
         plt.xlabel('Auction Index')
         plt.ylabel('Bid($)')
